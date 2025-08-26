@@ -1,7 +1,7 @@
 import os
 from typing import Dict, List, Optional
 import torch
-from transformers import GPT2Tokenizer
+from transformers import AutoTokenizer
 
 class PipelineValidator:
     @staticmethod
@@ -32,7 +32,7 @@ class PipelineValidator:
         return results
 
     @staticmethod
-    def validate_chunk(chunk: str, tokenizer: GPT2Tokenizer) -> Dict[str, bool]:
+    def validate_chunk(chunk: str, tokenizer: AutoTokenizer) -> Dict[str, bool]:
         """Validate text chunk quality."""
         tokens = tokenizer.encode(chunk)
         results = {
