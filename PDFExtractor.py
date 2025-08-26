@@ -145,8 +145,8 @@ class PDFProcessor:
 
 def main():
     # Define directories
-    pdf_dir = './pdfs'
-    output_dir = './processed_texts'
+    pdf_dir = 'SecCon_LLMFinetune/pdfs'
+    output_dir = 'SecCon_LLMFinetune/processed_texts'
     
     # Validate directories
     if not os.path.exists(pdf_dir):
