@@ -1,8 +1,8 @@
+from unsloth import FastLanguageModel
 import os
 import json
 from typing import List, Dict, Generator
 from transformers import AutoTokenizer
-from unsloth import FastLanguageModel
 import torch
 from torch.utils.data import Dataset
 import numpy as np
