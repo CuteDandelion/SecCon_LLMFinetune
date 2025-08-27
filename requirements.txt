@@ -1,11 +1,10 @@
+unsloth==2025.8.9
 torch==2.4.0
 transformers==4.55.2
 pdfminer.six==20221105
 numpy==1.24.3
 tqdm==4.67.1
 scikit-learn==1.3.2 
-unsloth==2025.8.9
-unsloth_zoo==2025.8.8
 trl 
 peft 
 accelerate 
