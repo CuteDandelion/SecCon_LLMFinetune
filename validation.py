@@ -36,7 +36,7 @@ class PipelineValidator:
         """Validate text chunk quality."""
         tokens = tokenizer.encode(chunk)
         results = {
-            'valid_length': 100 <= len(tokens) <= 1024,
+            'valid_length': 100 <= len(tokens) <= 2048,
             'complete_sentences': chunk.strip()[-1] in '.!?',
             'valid_tokens': all(t in tokenizer.get_vocab() for t in tokenizer.encode(chunk))
         }

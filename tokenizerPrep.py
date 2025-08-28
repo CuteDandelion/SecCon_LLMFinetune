@@ -9,13 +9,13 @@ import numpy as np
 from validation import validate_pipeline_step
 
 class TextDatasetPrep:
-    def __init__(self, input_dir: str, output_dir: str, chunk_size: int = 1024, batch_size: int = 1000):
+    def __init__(self, input_dir: str, output_dir: str, chunk_size: int = 2048, batch_size: int = 1000):
         """Initialize the dataset preparation with directories and parameters."""
         self.input_dir = input_dir
         self.output_dir = output_dir
         self.chunk_size = chunk_size
         self.batch_size = batch_size
-        self.tokenizer = AutoTokenizer.from_pretrained("unsloth/Phi-3-mini-4k-instruct-bnb-4bit")
+        self.tokenizer = AutoTokenizer.from_pretrained("unsloth/Phi-4-mini-reasoning-GGUF")
         # Add padding token to tokenizer
         self.tokenizer.pad_token = self.tokenizer.eos_token
         os.makedirs(output_dir, exist_ok=True)
@@ -68,7 +68,7 @@ class TextDatasetPrep:
 
             all_chunks = []
             total_tokens = 0
-            max_tokens = 1_000_000  # Limit total tokens to prevent memory issues
+            max_tokens = 2_000_000  # Limit total tokens to prevent memory issues
             
             for item in metadata:
                 if total_tokens >= max_tokens:
@@ -134,7 +134,7 @@ class TokenizedDataset(Dataset):
         try:
             with open(chunks_file, 'r', encoding='utf-8') as f:
                 self.chunks = json.load(f)
-            self.tokenizer = AutoTokenizer.from_pretrained("unsloth/Phi-3-mini-4k-instruct-bnb-4bit")
+            self.tokenizer = AutoTokenizer.from_pretrained("unsloth/Phi-4-mini-reasoning-GGUF")
             self.max_length = max_length
         except Exception as e:
             print(f"Error initializing dataset: {str(e)}")
