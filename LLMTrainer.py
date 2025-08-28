@@ -1,27 +1,49 @@
 from unsloth import FastLanguageModel
-import torch
-from trl import SFTTrainer
-from transformers import TrainingArguments
 import os
+import torch
+from transformers import (
+    AutoTokenizer,
+    AutoModelForCausalLM,
+    TrainingArguments,
+    Trainer
+)
+from tokenizerPrep import TokenizedDataset
 from datasets import Dataset
 import json
+from validation import validate_pipeline_step
 
 class LLMTrainer:
-    def __init__(self, model_name: str = 'unsloth/Phi-3-mini-4k-instruct-bnb-4bit', output_dir: str = './fine_tuned_model'):
+    def __init__(self, model_name: str = 'microsoft/Phi-4-mini-reasoning', output_dir: str = 'SecCon_LLMFinetune/fine_tuned_model'):
         self.model_name = model_name
-        self.max_seq_length = 2048  # Choose sequence length
-        self.dtype = None  # Auto detection
+        self.output_dir = output_dir
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
         # Initialize with error handling
         try:
-            # Load model and tokenizer
-            self.model, self.tokenizer = FastLanguageModel.from_pretrained(
-                   model_name=self.model_name,
-                   max_seq_length=self.max_seq_length,
-                   dtype=self.dtype,
-                   load_in_4bit=True,
-             )
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+            self.model = AutoModelForCausalLM.from_pretrained(
+                           model_name,
+                           device_map="cuda",
+                           torch_dtype="auto",
+                           trust_remote_code=True,
+            )
+
+            # Add LoRA adapters
+            self.model = FastLanguageModel.get_peft_model(
+                  self.model,
+                  r=64,  # LoRA rank - higher = more capacity, more memory
+                  target_modules=[
+                       "q_proj", "k_proj", "v_proj", "o_proj",
+                       "gate_proj", "up_proj", "down_proj",
+                  ],
+                  lora_alpha=128,  # LoRA scaling factor (usually 2x rank)
+                  lora_dropout=0,  # Supports any, but = 0 is optimized
+                  bias="none",     # Supports any, but = "none" is optimized
+                  use_gradient_checkpointing="unsloth",  # Unsloth's optimized version
+                  random_state=3407,
+                  use_rslora=False,  # Rank stabilized LoRA
+                  loftq_config=None, # LoftQ
+            )
             
             # Set up memory efficient training
             if torch.cuda.is_available():
@@ -31,27 +53,12 @@ class LLMTrainer:
             
         except Exception as e:
             raise RuntimeError(f"Failed to initialize model: {str(e)}")
-        
-    
-    def apply_lora_adapter(self):
-        self.model = FastLanguageModel.get_peft_model(
-            self.model,
-            r=64,  # LoRA rank - higher = more capacity, more memory
-            target_modules=[
-                 "q_proj", "k_proj", "v_proj", "o_proj",
-                 "gate_proj", "up_proj", "down_proj",
-            ],
-            lora_alpha=128,  # LoRA scaling factor (usually 2x rank)
-            lora_dropout=0,  # Supports any, but = 0 is optimized
-            bias="none",     # Supports any, but = "none" is optimized
-            use_gradient_checkpointing="unsloth",  # Unsloth's optimized version
-            random_state=3407,
-            use_rslora=False,  # Rank stabilized LoRA
-            loftq_config=None, # LoftQ
-        )
-    
 
-    def prepare_training_args(self, num_train_epochs: int , batch_size: int = 4, gradient_accumulation_steps: int = 4) -> TrainingArguments:
+    def prepare_training_args(self, 
+                            num_train_epochs: int = 3,
+                            batch_size: int = 4,
+                            gradient_accumulation_steps: int = 4) -> TrainingArguments:
+        """Prepare optimized training arguments."""
         return TrainingArguments(
             output_dir=self.output_dir,
             num_train_epochs=num_train_epochs,
@@ -84,7 +91,8 @@ class LLMTrainer:
             seed=42
         )
 
-    def train(self, train_dataset: GPT2Dataset, training_args: TrainingArguments = None):
+    def train(self, train_dataset: TokenizedDataset, training_args: TrainingArguments = None):
+        """Train with proper error handling and memory management."""
         try:
             if training_args is None:
                 training_args = self.prepare_training_args()
@@ -105,14 +113,12 @@ class LLMTrainer:
                 generator=generator
             )
 
-            trainer = SFTTrainer(
-                       model=self.model,
-                       tokenizer=self.tokenizer,
-                       train_dataset=train_dataset,
-                       dataset_text_field="text",
-                       max_seq_length=self.max_seq_length,
-                       dataset_num_proc=2,
-                       args=training_args,
+            trainer = Trainer(
+                model=self.model,
+                args=training_args,
+                train_dataset=train_dataset,
+                eval_dataset=val_dataset,
+                tokenizer=self.tokenizer
             )
 
             # Train with checkpoint recovery
@@ -123,12 +129,14 @@ class LLMTrainer:
                              if d.startswith("checkpoint-")]
                 if checkpoints:
                     checkpoint = os.path.join(checkpoint_dir, sorted(checkpoints)[-1])
-            
+
             trainer.train(resume_from_checkpoint=checkpoint)
             
             # Save with error handling
             try:
                 trainer.save_model()
+                # Convert to GGUF
+                self.model.save_pretrained_gguf("merged_model_gguf", tokenizer=self.tokenizer, quantization_method="q4_k_m")
                 self.tokenizer.save_pretrained(self.output_dir)
             except Exception as e:
                 print(f"Warning: Error saving model: {str(e)}")
@@ -147,94 +155,143 @@ class LLMTrainer:
                 print("Failed to save emergency checkpoint")
             raise
 
-def format_prompt(example):
-    return f"### Input: {example['input']}\n### Output: {json.dumps(example['output'])}<|endoftext|>"
+class ChunkDataset(Dataset):
+    def __init__(self, chunks_file: str, tokenizer: AutoTokenizer, max_length: int = 2048):
+        """Initialize dataset with memory-efficient loading."""
+        try:
+            with open(chunks_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                self.chunks = data['chunks'] if isinstance(data, dict) else data
+                self.total_tokens = data.get('total_tokens', 0) if isinstance(data, dict) else 0
+            
+            self.tokenizer = tokenizer
+            self.max_length = max_length
+            
+            # Validate dataset size
+            if self.total_tokens > 1_000_000:  # Arbitrary limit for safety
+                print(f"Warning: Large dataset detected ({self.total_tokens} tokens)")
+                
+        except Exception as e:
+            print(f"Error initializing dataset: {str(e)}")
+            self.chunks = []
+            self.total_tokens = 0
+
+    def __len__(self):
+        return len(self.chunks)
+
+    def __getitem__(self, idx):
+        try:
+            chunk = self.chunks[idx]
+            
+            # Memory-efficient encoding
+            encodings = self.tokenizer(
+                chunk,
+                truncation=True,
+                max_length=self.max_length,
+                padding='max_length',
+                return_tensors='pt',
+                return_attention_mask=True,
+                return_token_type_ids=False  # Not needed for GPT-2
+            )
+            
+            return {
+                'input_ids': encodings['input_ids'].squeeze(),
+                'attention_mask': encodings['attention_mask'].squeeze()
+            }
+            
+        except Exception as e:
+            print(f"Error processing chunk {idx}: {str(e)}")
+            # Return empty tensors as fallback
+            return {
+                'input_ids': torch.zeros(self.max_length, dtype=torch.long),
+                'attention_mask': torch.zeros(self.max_length, dtype=torch.long)
+            }
 
 def main():
+    try:
+        input_dir = 'SecCon_LLMFinetune/tokenized_data'
+        output_dir = 'SecCon_LLMFinetune/fine_tuned_model'
+        chunks_file = os.path.join(input_dir, 'training_chunks.json')
+
+        # Validate directories and files
+        if not os.path.exists(input_dir):
+            raise ValueError(f"Input directory not found: {input_dir}")
+        if not os.path.exists(chunks_file):
+            raise ValueError(f"Chunks file not found: {chunks_file}")
+            
+        # Validate chunks file format
         try:
-            input_dir = './tokenized_data'
-            output_dir = './fine_tuned_model'
-            chunks_file = os.path.join(input_dir, 'training_chunks.json')
+            with open(chunks_file, 'r') as f:
+                chunks_data = json.load(f)
+                if isinstance(chunks_data, dict):
+                    if not chunks_data.get('chunks'):
+                        raise ValueError("No chunks found in data file")
+                    chunks = chunks_data['chunks']
+                else:
+                    chunks = chunks_data
+                if not chunks:
+                    raise ValueError("Empty chunks data")
+        except json.JSONDecodeError:
+            raise ValueError("Invalid chunks JSON format")
 
-            # Validate directories and files
-            if not os.path.exists(input_dir):
-               raise ValueError(f"Input directory not found: {input_dir}")
-            if not os.path.exists(chunks_file):
-               raise ValueError(f"Chunks file not found: {chunks_file}")
-            
-            # Validate chunks file format
-            try:
-               with open(chunks_file, 'r') as f:
-                  chunks_data = json.load(f)
-                  if isinstance(chunks_data, dict):
-                      if not chunks_data.get('chunks'):
-                          raise ValueError("No chunks found in data file")
-                      chunks = chunks_data['chunks']
-                  else:
-                      chunks = chunks_data
-                  if not chunks:
-                      raise ValueError("Empty chunks data")
-            except json.JSONDecodeError:
-                raise ValueError("Invalid chunks JSON format")
-
-            # Initialize with proper error handling
-            try:
-                tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
-            except Exception as e:
-                raise RuntimeError(f"Failed to load tokenizer: {str(e)}")
-            
-            dataset = GPT2Dataset(chunks_file, tokenizer)
-        
-            if len(dataset) == 0:
-               raise ValueError("Dataset is empty")
-            
-            # Validate CUDA availability if needed
-            if torch.cuda.is_available():
-               try:
-                   # Test CUDA memory allocation
-                   test_tensor = torch.zeros(1).cuda()
-                   del test_tensor
-                   torch.cuda.empty_cache()
-               except Exception as e:
-                   raise RuntimeError(f"CUDA available but not working: {str(e)}")
-            
-            # Check dataset size and set batch size
-            if dataset.total_tokens > 1_000_000:
-              print("Warning: Large dataset detected. Using conservative batch size.")
-              batch_size = 1
-            else:
-              if torch.cuda.is_available():
-                 total_memory = torch.cuda.get_device_properties(0).total_memory
-                 batch_size = max(1, min(4, int(total_memory / (1024**3) * 2)))
-              else:
-                 batch_size = 1
-
-            gradient_accumulation_steps = max(1, 16 // batch_size)
-
-            # Initialize trainer
-            trainer = GPT2Trainer(output_dir=output_dir)
-            training_args = trainer.prepare_training_args(
-                batch_size=batch_size,
-                gradient_accumulation_steps=gradient_accumulation_steps
-            )
-        
-            # Validate output directory
-            os.makedirs(output_dir, exist_ok=True)
-            if not os.access(output_dir, os.W_OK):
-               raise ValueError(f"Output directory not writable: {output_dir}")
-        
-            # Start training
-            trainer.train(dataset, training_args)
-        
-            # Validate saved model
-            if not os.path.exists(os.path.join(output_dir, 'pytorch_model.bin')):
-               raise ValueError("Model file not found after training")
-            if not os.path.exists(os.path.join(output_dir, 'config.json')):
-               raise ValueError("Model config not found after training")
-
+        # Initialize with proper error handling
+        try:
+            tokenizer = AutoTokenizer.from_pretrained('microsoft/Phi-4-mini-reasoning')
         except Exception as e:
-           print(f"Fatal error in training pipeline: {str(e)}")
-           raise
+            raise RuntimeError(f"Failed to load tokenizer: {str(e)}")
+            
+        dataset = TokenizedDataset(chunks_file, tokenizer)
+        
+        if len(dataset) == 0:
+            raise ValueError("Dataset is empty")
+            
+        # Validate CUDA availability if needed
+        if torch.cuda.is_available():
+            try:
+                # Test CUDA memory allocation
+                test_tensor = torch.zeros(1).cuda()
+                del test_tensor
+                torch.cuda.empty_cache()
+            except Exception as e:
+                raise RuntimeError(f"CUDA available but not working: {str(e)}")
+            
+        # Check dataset size and set batch size
+        if dataset.total_tokens > 1_000_000:
+            print("Warning: Large dataset detected. Using conservative batch size.")
+            batch_size = 1
+        else:
+            if torch.cuda.is_available():
+                total_memory = torch.cuda.get_device_properties(0).total_memory
+                batch_size = max(1, min(4, int(total_memory / (1024**3) * 2)))
+            else:
+                batch_size = 1
+
+        gradient_accumulation_steps = max(1, 16 // batch_size)
+
+        # Initialize trainer
+        trainer = LLMTrainer(output_dir=output_dir)
+        training_args = trainer.prepare_training_args(
+            batch_size=batch_size,
+            gradient_accumulation_steps=gradient_accumulation_steps
+        )
+        
+        # Validate output directory
+        os.makedirs(output_dir, exist_ok=True)
+        if not os.access(output_dir, os.W_OK):
+            raise ValueError(f"Output directory not writable: {output_dir}")
+        
+        # Start training
+        trainer.train(dataset, training_args)
+        
+        # Validate saved model
+        if not os.path.exists(os.path.join(output_dir, 'pytorch_model.bin')):
+            raise ValueError("Model file not found after training")
+        if not os.path.exists(os.path.join(output_dir, 'config.json')):
+            raise ValueError("Model config not found after training")
+
+    except Exception as e:
+        print(f"Fatal error in training pipeline: {str(e)}")
+        raise
 
 if __name__ == "__main__":
     main() 

@@ -129,7 +129,7 @@ class TextDatasetPrep:
             return 0
 
 class TokenizedDataset(Dataset):
-    def __init__(self, chunks_file: str, max_length: int = 1024):
+    def __init__(self, chunks_file: str, max_length: int = 2048):
         """Initialize the dataset with chunks and tokenizer."""
         try:
             with open(chunks_file, 'r', encoding='utf-8') as f:
