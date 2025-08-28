@@ -15,7 +15,7 @@ class TextDatasetPrep:
         self.output_dir = output_dir
         self.chunk_size = chunk_size
         self.batch_size = batch_size
-        self.tokenizer = AutoTokenizer.from_pretrained("unsloth/Phi-4-mini-reasoning-GGUF")
+        self.tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-4-mini-reasoning")
         # Add padding token to tokenizer
         self.tokenizer.pad_token = self.tokenizer.eos_token
         os.makedirs(output_dir, exist_ok=True)
@@ -134,7 +134,7 @@ class TokenizedDataset(Dataset):
         try:
             with open(chunks_file, 'r', encoding='utf-8') as f:
                 self.chunks = json.load(f)
-            self.tokenizer = AutoTokenizer.from_pretrained("unsloth/Phi-4-mini-reasoning-GGUF")
+            self.tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-4-mini-reasoning")
             self.max_length = max_length
         except Exception as e:
             print(f"Error initializing dataset: {str(e)}")
