@@ -92,7 +92,7 @@ class LLMTrainer:
             warmup_steps=100,
             lr_scheduler_type="cosine",
             # Early stopping
-            early_stopping_patience=3,
+            # early_stopping_patience=3,
             # Additional stability settings
             ddp_find_unused_parameters=False,
             full_determinism=True,
