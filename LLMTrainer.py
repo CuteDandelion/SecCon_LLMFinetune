@@ -78,7 +78,7 @@ class LLMTrainer:
             max_grad_norm=1.0,
             logging_steps=100,
             logging_dir=os.path.join(self.output_dir, 'logs'),
-            evaluation_strategy="steps",
+            #evaluation_strategy="steps",
             eval_steps=500,
             load_best_model_at_end=True,
             metric_for_best_model="loss",
