@@ -20,12 +20,20 @@ class LLMTrainer:
         
         # Initialize with error handling
         try:
-            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-            self.model = AutoModelForCausalLM.from_pretrained(
-                           model_name,
-                           device_map="cuda",
-                           torch_dtype="auto",
-                           trust_remote_code=True,
+            #self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+            #self.model = AutoModelForCausalLM.from_pretrained(
+            #               model_name,
+            #               device_map="cuda",
+            #               torch_dtype="auto",
+            #               trust_remote_code=True,
+            #)
+
+            # Load model and tokenizer
+            self.model, self.tokenizer = FastLanguageModel.from_pretrained(
+                    model_name=model_name,
+                    max_seq_length=2048,
+                    dtype=None,
+                    load_in_4bit=False,
             )
 
             # Add LoRA adapters
