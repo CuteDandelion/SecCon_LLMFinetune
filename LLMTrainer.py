@@ -240,7 +240,7 @@ def main():
         except Exception as e:
             raise RuntimeError(f"Failed to load tokenizer: {str(e)}")
             
-        dataset = TokenizedDataset(chunks_file, tokenizer)
+        dataset = ChunkDataset(chunks_file, tokenizer)
         
         if len(dataset) == 0:
             raise ValueError("Dataset is empty")
